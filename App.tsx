@@ -18,11 +18,11 @@ const getTodayString = () => new Date().toISOString().split('T')[0];
 export default function App() {
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [loading, setLoading] = useState(true);
-   
+    
   const [isAdminMode, setIsAdminMode] = useState(false);
   const [activeAdminView, setActiveAdminView] = useState<AdminView>(AdminView.NONE);
   const [pinInput, setPinInput] = useState('');
-   
+    
   // Edit/Add states
   const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
   const [addingToCategory, setAddingToCategory] = useState<CategoryKey | null>(null);
@@ -42,9 +42,9 @@ export default function App() {
         id: doc.id,
         ...doc.data()
       } as MenuItem));
-      
+       
       setMenuItems(items);
-      
+       
       // --- החלק החדש: איפוס מלאי יומי ---
       // בודקים אם יש פריטים שאינם זמינים ושסומנו בתאריך ישן
       const today = getTodayString();
@@ -106,11 +106,11 @@ export default function App() {
     try {
       const itemRef = doc(db, MENU_COLLECTION, item.id);
       const today = getTodayString();
-      
+       
       // אם אנחנו עומדים להפוך אותו ל"לא זמין", נשמור את התאריך של היום
       // אם אנחנו מחזירים אותו למלאי ידנית, נמחוק את התאריך
       const willBeAvailable = !item.available;
-      
+       
       await updateDoc(itemRef, { 
           available: willBeAvailable,
           outOfStockDate: willBeAvailable ? null : today 
@@ -136,7 +136,7 @@ export default function App() {
   const handleSaveItem = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingItem) return;
-    
+     
     try {
       await setDoc(doc(db, MENU_COLLECTION, editingItem.id), editingItem);
       setEditingItem(null);
@@ -179,13 +179,25 @@ export default function App() {
     }
   };
 
+  // --- הפונקציה המתוקנת ---
   const askAI = async () => {
     if (!aiMood.trim()) return;
+    
     setIsAILoading(true);
-    const recommendation = await getAIRecommendation(aiMood, menuItems);
+    
+    // שומרים את הטקסט במשתנה זמני כדי שנוכל לנקות את התיבה
+    const textToSend = aiMood;
+    
+    // מנקים את התיבה מיד
+    setAiMood('');
+
+    // שולחים את הטקסט השמור ל-AI
+    const recommendation = await getAIRecommendation(textToSend, menuItems);
+    
     setAiResponse(recommendation);
     setIsAILoading(false);
   };
+  // -----------------------
 
   if (loading) {
     return (
@@ -214,7 +226,7 @@ export default function App() {
             <h1 className="text-3xl font-black tracking-widest font-serif text-white">INDIGO COFFEE</h1>
             <span className="text-[10px] tracking-[0.2em] uppercase text-indigo-300 -mt-1 font-bold">IDO & IDDO</span>
           </div>
-          
+           
           <div className="flex gap-3">
             <button 
               onClick={() => setIsAIChatOpen(true)}
@@ -324,7 +336,7 @@ export default function App() {
                     {/* Admin Actions Overlay */}
                     {isAdminMode && (
                       <div className="absolute bottom-4 left-4 flex gap-2">
-                         <button 
+                          <button 
                           onClick={(e) => { e.stopPropagation(); setEditingItem(item); }}
                           className="p-2 bg-indigo-950 text-white rounded-xl shadow-lg hover:bg-indigo-800 transition-colors"
                         >
@@ -378,7 +390,7 @@ export default function App() {
                  <X className="w-5 h-5" />
                </button>
             </div>
-            
+             
             <div className="flex-grow overflow-y-auto p-6 space-y-6">
               {!aiResponse && !isAILoading && (
                 <div className="text-center space-y-4 py-8">
