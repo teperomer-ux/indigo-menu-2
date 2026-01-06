@@ -45,17 +45,13 @@ export default function App() {
        
       setMenuItems(items);
        
-      // --- החלק החדש: איפוס מלאי יומי ---
-      // בודקים אם יש פריטים שאינם זמינים ושסומנו בתאריך ישן
+      // --- איפוס מלאי יומי ---
       const today = getTodayString();
       const batch = writeBatch(db);
       let updatesNeeded = false;
 
       items.forEach((item) => {
-        // המרה ל-any כדי לגשת לשדה outOfStockDate שאולי לא קיים ב-Types
         const itemData = item as any;
-        
-        // אם הפריט לא זמין, ויש לו תאריך חסימה, והתאריך הוא לא היום -> תחדש מלאי
         if (!item.available && itemData.outOfStockDate && itemData.outOfStockDate !== today) {
             const itemRef = doc(db, MENU_COLLECTION, item.id);
             batch.update(itemRef, { 
@@ -69,9 +65,8 @@ export default function App() {
       if (updatesNeeded) {
           batch.commit().catch(err => console.error("Error auto-resetting stock:", err));
       }
-      // -------------------------------------
+      // -----------------------
 
-      // If DB is empty, seed it with initial data
       if (items.length === 0 && !snapshot.metadata.fromCache) {
         seedDatabase();
       } else {
@@ -106,9 +101,6 @@ export default function App() {
     try {
       const itemRef = doc(db, MENU_COLLECTION, item.id);
       const today = getTodayString();
-       
-      // אם אנחנו עומדים להפוך אותו ל"לא זמין", נשמור את התאריך של היום
-      // אם אנחנו מחזירים אותו למלאי ידנית, נמחוק את התאריך
       const willBeAvailable = !item.available;
        
       await updateDoc(itemRef, { 
@@ -179,25 +171,34 @@ export default function App() {
     }
   };
 
-  // --- הפונקציה המתוקנת ---
   const askAI = async () => {
     if (!aiMood.trim()) return;
-    
     setIsAILoading(true);
     
-    // שומרים את הטקסט במשתנה זמני כדי שנוכל לנקות את התיבה
+    // שמירת הטקסט וניקוי התיבה
     const textToSend = aiMood;
-    
-    // מנקים את התיבה מיד
     setAiMood('');
 
-    // שולחים את הטקסט השמור ל-AI
     const recommendation = await getAIRecommendation(textToSend, menuItems);
-    
     setAiResponse(recommendation);
     setIsAILoading(false);
   };
-  // -----------------------
+
+  // --- שלב 1: פונקציית עזר להדגשת טקסט בין כוכביות ---
+  const renderFormattedText = (text: string) => {
+    if (!text) return null;
+    return text.split('**').map((part, index) => 
+      // כל חלק אי-זוגי הוא טקסט מודגש
+      index % 2 === 1 ? (
+        <strong key={index} className="font-black text-indigo-700">
+          {part}
+        </strong>
+      ) : (
+        part
+      )
+    );
+  };
+  // ---------------------------------------------------
 
   if (loading) {
     return (
@@ -234,7 +235,6 @@ export default function App() {
               title="AI Assistant"
             >
               <Sparkles className="w-5 h-5 group-hover:animate-spin-slow transition-transform" />
-              {/* Optional Subtle Label */}
               <span className="hidden sm:inline text-[10px] font-bold uppercase tracking-wider pl-1">AI Assistant</span>
             </button>
             <button 
@@ -406,7 +406,8 @@ export default function App() {
                     <Sparkles className="w-4 h-4" />
                     <span className="text-[10px] font-bold uppercase tracking-widest">Barista Recommends</span>
                   </div>
-                  {aiResponse}
+                  {/* --- שימוש בפונקציה החדשה להצגת טקסט --- */}
+                  {renderFormattedText(aiResponse)}
                 </div>
               )}
 
