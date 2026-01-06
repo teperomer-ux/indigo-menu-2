@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { 
   Coffee, ShieldCheck, RefreshCw, XCircle, CheckCircle, 
@@ -13,14 +12,17 @@ import { getAIRecommendation } from './geminiService';
 
 const MENU_COLLECTION = 'menu_items';
 
+// פונקציית עזר לקבלת התאריך של היום בפורמט YYYY-MM-DD
+const getTodayString = () => new Date().toISOString().split('T')[0];
+
 export default function App() {
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [loading, setLoading] = useState(true);
-  
+   
   const [isAdminMode, setIsAdminMode] = useState(false);
   const [activeAdminView, setActiveAdminView] = useState<AdminView>(AdminView.NONE);
   const [pinInput, setPinInput] = useState('');
-  
+   
   // Edit/Add states
   const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
   const [addingToCategory, setAddingToCategory] = useState<CategoryKey | null>(null);
@@ -43,6 +45,32 @@ export default function App() {
       
       setMenuItems(items);
       
+      // --- החלק החדש: איפוס מלאי יומי ---
+      // בודקים אם יש פריטים שאינם זמינים ושסומנו בתאריך ישן
+      const today = getTodayString();
+      const batch = writeBatch(db);
+      let updatesNeeded = false;
+
+      items.forEach((item) => {
+        // המרה ל-any כדי לגשת לשדה outOfStockDate שאולי לא קיים ב-Types
+        const itemData = item as any;
+        
+        // אם הפריט לא זמין, ויש לו תאריך חסימה, והתאריך הוא לא היום -> תחדש מלאי
+        if (!item.available && itemData.outOfStockDate && itemData.outOfStockDate !== today) {
+            const itemRef = doc(db, MENU_COLLECTION, item.id);
+            batch.update(itemRef, { 
+                available: true,
+                outOfStockDate: null 
+            });
+            updatesNeeded = true;
+        }
+      });
+
+      if (updatesNeeded) {
+          batch.commit().catch(err => console.error("Error auto-resetting stock:", err));
+      }
+      // -------------------------------------
+
       // If DB is empty, seed it with initial data
       if (items.length === 0 && !snapshot.metadata.fromCache) {
         seedDatabase();
@@ -77,7 +105,16 @@ export default function App() {
     if (!isAdminMode) return;
     try {
       const itemRef = doc(db, MENU_COLLECTION, item.id);
-      await updateDoc(itemRef, { available: !item.available });
+      const today = getTodayString();
+      
+      // אם אנחנו עומדים להפוך אותו ל"לא זמין", נשמור את התאריך של היום
+      // אם אנחנו מחזירים אותו למלאי ידנית, נמחוק את התאריך
+      const willBeAvailable = !item.available;
+      
+      await updateDoc(itemRef, { 
+          available: willBeAvailable,
+          outOfStockDate: willBeAvailable ? null : today 
+      });
     } catch (e) {
       console.error("Error updating availability:", e);
       alert("שגיאה בעדכון זמינות");
