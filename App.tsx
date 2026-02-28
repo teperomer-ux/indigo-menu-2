@@ -16,6 +16,14 @@ import { initAIChat, sendChatMessage } from './geminiService';
 
 const MENU_COLLECTION = 'menu_items';
 
+const getLocalYYYYMMDD = () => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -42,6 +50,7 @@ export default function App() {
   const [isAILoading, setIsAILoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState(false);
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -125,7 +134,22 @@ export default function App() {
         ...doc.data()
       } as MenuItem));
       
-      setMenuItems(items);
+      const today = getLocalYYYYMMDD();
+      let needsStateUpdate = false;
+      const updatedItems = [...items];
+
+      items.forEach((item, index) => {
+        if (!item.available && item.unavailableDate && item.unavailableDate !== today) {
+          // It's a new day, reset availability
+          const itemRef = doc(db, MENU_COLLECTION, item.id);
+          updateDoc(itemRef, { available: true, unavailableDate: null }).catch(console.error);
+          
+          updatedItems[index] = { ...item, available: true, unavailableDate: null };
+          needsStateUpdate = true;
+        }
+      });
+      
+      setMenuItems(needsStateUpdate ? updatedItems : items);
       
       // If DB is empty, seed it with initial data
       if (items.length === 0 && !snapshot.metadata.fromCache) {
@@ -139,6 +163,28 @@ export default function App() {
     });
 
     return () => unsubscribe();
+  }, []);
+
+  // Periodic check for date change (if app is left open overnight)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const today = getLocalYYYYMMDD();
+      setMenuItems(prevItems => {
+        let needsUpdate = false;
+        const updated = prevItems.map(item => {
+          if (!item.available && item.unavailableDate && item.unavailableDate !== today) {
+            needsUpdate = true;
+            const itemRef = doc(db, MENU_COLLECTION, item.id);
+            updateDoc(itemRef, { available: true, unavailableDate: null }).catch(console.error);
+            return { ...item, available: true, unavailableDate: null };
+          }
+          return item;
+        });
+        return needsUpdate ? updated : prevItems;
+      });
+    }, 60000); // Check every minute
+
+    return () => clearInterval(interval);
   }, []);
 
   const seedDatabase = async () => {
@@ -161,7 +207,12 @@ export default function App() {
     if (!isAdminMode) return;
     try {
       const itemRef = doc(db, MENU_COLLECTION, item.id);
-      await updateDoc(itemRef, { available: !item.available });
+      const newAvailable = !item.available;
+      const today = getLocalYYYYMMDD();
+      await updateDoc(itemRef, { 
+        available: newAvailable,
+        unavailableDate: newAvailable ? null : today
+      });
     } catch (e) {
       console.error("Error updating availability:", e);
       alert("שגיאה בעדכון זמינות");
@@ -389,7 +440,13 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="w-16 h-16 rounded-2xl bg-indigo-50 flex items-center justify-center text-3xl shadow-inner shrink-0 group-hover/item:scale-110 transition-transform overflow-hidden">
+                      <div 
+                        className="w-16 h-16 rounded-2xl bg-indigo-50 flex items-center justify-center text-3xl shadow-inner shrink-0 group-hover/item:scale-110 transition-transform overflow-hidden cursor-pointer"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedImage(item.image);
+                        }}
+                      >
                         {item.image.startsWith('http') || item.image.startsWith('data:image') ? (
                           <img src={item.image} alt={item.name} className="w-full h-full object-cover" />
                         ) : (
@@ -728,6 +785,35 @@ export default function App() {
                </button>
              </div>
            </div>
+        </div>
+      )}
+
+      {/* Full Screen Image Modal */}
+      {selectedImage && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200"
+          onClick={() => setSelectedImage(null)}
+        >
+          <div className="relative max-w-4xl w-full max-h-[90vh] flex items-center justify-center">
+            <button 
+              onClick={() => setSelectedImage(null)}
+              className="absolute -top-12 right-0 p-2 text-white hover:text-indigo-200 transition-colors"
+            >
+              <X className="w-8 h-8" />
+            </button>
+            {selectedImage.startsWith('http') || selectedImage.startsWith('data:image') ? (
+              <img 
+                src={selectedImage} 
+                alt="Full screen preview" 
+                className="max-w-full max-h-[80vh] object-contain rounded-lg shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              />
+            ) : (
+              <div className="text-[150px] bg-white rounded-3xl p-12 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                {selectedImage}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
