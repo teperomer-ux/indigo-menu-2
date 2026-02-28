@@ -54,6 +54,44 @@ export default function App() {
     }
   }, [chatMessages, isAIChatOpen, isAILoading]);
 
+  const processImage = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const MAX_WIDTH = 600;
+          const MAX_HEIGHT = 600;
+          let width = img.width;
+          let height = img.height;
+
+          if (width > height) {
+            if (width > MAX_WIDTH) {
+              height *= MAX_WIDTH / width;
+              width = MAX_WIDTH;
+            }
+          } else {
+            if (height > MAX_HEIGHT) {
+              width *= MAX_HEIGHT / height;
+              height = MAX_HEIGHT;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx?.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', 0.8));
+        };
+        img.onerror = (error) => reject(error);
+        img.src = event.target?.result as string;
+      };
+      reader.onerror = (error) => reject(error);
+      reader.readAsDataURL(file);
+    });
+  };
+
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, isEditing: boolean) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -61,20 +99,18 @@ export default function App() {
     setIsUploading(true);
     setUploadSuccess(false);
     try {
-      const storageRef = ref(storage, `menu_images/${Date.now()}_${file.name}`);
-      await uploadBytes(storageRef, file);
-      const downloadURL = await getDownloadURL(storageRef);
+      const dataUrl = await processImage(file);
       
       if (isEditing && editingItem) {
-        setEditingItem({ ...editingItem, image: downloadURL });
+        setEditingItem({ ...editingItem, image: dataUrl });
       } else {
-        setNewItemData({ ...newItemData, image: downloadURL });
+        setNewItemData({ ...newItemData, image: dataUrl });
       }
       setUploadSuccess(true);
       setTimeout(() => setUploadSuccess(false), 3000);
     } catch (error) {
-      console.error("Error uploading image:", error);
-      alert("שגיאה בהעלאת התמונה");
+      console.error("Error processing image:", error);
+      alert("שגיאה בעיבוד התמונה");
     } finally {
       setIsUploading(false);
       e.target.value = ''; // Reset input
@@ -354,7 +390,7 @@ export default function App() {
                       </div>
 
                       <div className="w-16 h-16 rounded-2xl bg-indigo-50 flex items-center justify-center text-3xl shadow-inner shrink-0 group-hover/item:scale-110 transition-transform overflow-hidden">
-                        {item.image.startsWith('http') ? (
+                        {item.image.startsWith('http') || item.image.startsWith('data:image') ? (
                           <img src={item.image} alt={item.name} className="w-full h-full object-cover" />
                         ) : (
                           item.image
@@ -567,7 +603,7 @@ export default function App() {
                     <input type="file" accept="image/*" className="hidden" onChange={(e) => handleImageUpload(e, true)} disabled={isUploading} />
                   </label>
                 </div>
-                {editingItem.image.startsWith('http') && (
+                {(editingItem.image.startsWith('http') || editingItem.image.startsWith('data:image')) && (
                   <div className="mt-2 w-20 h-20 rounded-xl overflow-hidden border border-slate-200">
                     <img src={editingItem.image} alt="Preview" className="w-full h-full object-cover" />
                   </div>
@@ -642,7 +678,7 @@ export default function App() {
                     <input type="file" accept="image/*" className="hidden" onChange={(e) => handleImageUpload(e, false)} disabled={isUploading} />
                   </label>
                 </div>
-                {newItemData.image.startsWith('http') && (
+                {(newItemData.image.startsWith('http') || newItemData.image.startsWith('data:image')) && (
                   <div className="mt-2 w-20 h-20 rounded-xl overflow-hidden border border-slate-200 mx-auto">
                     <img src={newItemData.image} alt="Preview" className="w-full h-full object-cover" />
                   </div>
