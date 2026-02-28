@@ -1,28 +1,34 @@
-import React, { useState, useEffect } from 'react';
+
+import React, { useState, useEffect, useRef } from 'react';
+import Markdown from 'react-markdown';
 import { 
   Coffee, ShieldCheck, RefreshCw, XCircle, CheckCircle, 
   LogOut, QrCode, Utensils, Info, Pencil, Trash2, Save, 
-  X, Plus, AlertTriangle, Sparkles, MessageSquare 
+  X, Plus, AlertTriangle, Sparkles, MessageSquare, UploadCloud, Image as ImageIcon,
+  Send
 } from 'lucide-react';
 import { collection, onSnapshot, doc, updateDoc, setDoc, deleteDoc, getDocs, writeBatch } from 'firebase/firestore';
-import { db } from './firebase';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { db, storage } from './firebase';
 import { MenuItem, CategoryKey, AdminView, NewItemData } from './types';
 import { INITIAL_MENU, CATEGORIES, DEFAULT_ICONS, ADMIN_PIN } from './constants';
-import { getAIRecommendation } from './geminiService';
+import { initAIChat, sendChatMessage } from './geminiService';
 
 const MENU_COLLECTION = 'menu_items';
 
-// פונקציית עזר לקבלת התאריך של היום בפורמט YYYY-MM-DD
-const getTodayString = () => new Date().toISOString().split('T')[0];
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
 
 export default function App() {
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [loading, setLoading] = useState(true);
-    
+  
   const [isAdminMode, setIsAdminMode] = useState(false);
   const [activeAdminView, setActiveAdminView] = useState<AdminView>(AdminView.NONE);
   const [pinInput, setPinInput] = useState('');
-    
+  
   // Edit/Add states
   const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
   const [addingToCategory, setAddingToCategory] = useState<CategoryKey | null>(null);
@@ -32,8 +38,39 @@ export default function App() {
   // AI Assistant state
   const [isAIChatOpen, setIsAIChatOpen] = useState(false);
   const [aiMood, setAiMood] = useState('');
-  const [aiResponse, setAiResponse] = useState('');
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [isAILoading, setIsAILoading] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isAIChatOpen) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages, isAIChatOpen, isAILoading]);
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, isEditing: boolean) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploading(true);
+    try {
+      const storageRef = ref(storage, `menu_images/${Date.now()}_${file.name}`);
+      await uploadBytes(storageRef, file);
+      const downloadURL = await getDownloadURL(storageRef);
+      
+      if (isEditing && editingItem) {
+        setEditingItem({ ...editingItem, image: downloadURL });
+      } else {
+        setNewItemData({ ...newItemData, image: downloadURL });
+      }
+    } catch (error) {
+      console.error("Error uploading image:", error);
+      alert("שגיאה בהעלאת התמונה");
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   // Initial Data Load & Subscription
   useEffect(() => {
@@ -42,31 +79,10 @@ export default function App() {
         id: doc.id,
         ...doc.data()
       } as MenuItem));
-       
+      
       setMenuItems(items);
-       
-      // --- איפוס מלאי יומי ---
-      const today = getTodayString();
-      const batch = writeBatch(db);
-      let updatesNeeded = false;
-
-      items.forEach((item) => {
-        const itemData = item as any;
-        if (!item.available && itemData.outOfStockDate && itemData.outOfStockDate !== today) {
-            const itemRef = doc(db, MENU_COLLECTION, item.id);
-            batch.update(itemRef, { 
-                available: true,
-                outOfStockDate: null 
-            });
-            updatesNeeded = true;
-        }
-      });
-
-      if (updatesNeeded) {
-          batch.commit().catch(err => console.error("Error auto-resetting stock:", err));
-      }
-      // -----------------------
-
+      
+      // If DB is empty, seed it with initial data
       if (items.length === 0 && !snapshot.metadata.fromCache) {
         seedDatabase();
       } else {
@@ -100,13 +116,7 @@ export default function App() {
     if (!isAdminMode) return;
     try {
       const itemRef = doc(db, MENU_COLLECTION, item.id);
-      const today = getTodayString();
-      const willBeAvailable = !item.available;
-       
-      await updateDoc(itemRef, { 
-          available: willBeAvailable,
-          outOfStockDate: willBeAvailable ? null : today 
-      });
+      await updateDoc(itemRef, { available: !item.available });
     } catch (e) {
       console.error("Error updating availability:", e);
       alert("שגיאה בעדכון זמינות");
@@ -128,7 +138,7 @@ export default function App() {
   const handleSaveItem = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingItem) return;
-     
+    
     try {
       await setDoc(doc(db, MENU_COLLECTION, editingItem.id), editingItem);
       setEditingItem(null);
@@ -171,34 +181,39 @@ export default function App() {
     }
   };
 
+  const handleOpenChat = () => {
+    initAIChat(menuItems);
+    setChatMessages([{ 
+      role: 'assistant', 
+      content: 'היי! אני הבריסטה הדיגיטלי של אינדיגו. מה מתחשק לכם היום?\nספרו לי איך אתם מרגישים ואמליץ לכם על הזיווג המושלם ☕✨' 
+    }]);
+    setIsAIChatOpen(true);
+  };
+
+  const handleCloseChat = () => {
+    setIsAIChatOpen(false);
+    setTimeout(() => {
+      setChatMessages([]);
+      setAiMood('');
+    }, 300);
+  };
+
   const askAI = async () => {
     if (!aiMood.trim()) return;
+    const userMsg = aiMood.trim();
+    setAiMood('');
+    setChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
     setIsAILoading(true);
     
-    // שמירת הטקסט וניקוי התיבה
-    const textToSend = aiMood;
-    setAiMood('');
-
-    const recommendation = await getAIRecommendation(textToSend, menuItems);
-    setAiResponse(recommendation);
+    const response = await sendChatMessage(userMsg);
+    
+    setChatMessages(prev => [...prev, { role: 'assistant', content: response }]);
     setIsAILoading(false);
   };
 
-  // --- שלב 1: פונקציית עזר להדגשת טקסט בין כוכביות ---
-  const renderFormattedText = (text: string) => {
-    if (!text) return null;
-    return text.split('**').map((part, index) => 
-      // כל חלק אי-זוגי הוא טקסט מודגש
-      index % 2 === 1 ? (
-        <strong key={index} className="font-black text-indigo-700">
-          {part}
-        </strong>
-      ) : (
-        part
-      )
-    );
+  const getAccessibilityClasses = () => {
+    return '';
   };
-  // ---------------------------------------------------
 
   if (loading) {
     return (
@@ -227,14 +242,15 @@ export default function App() {
             <h1 className="text-3xl font-black tracking-widest font-serif text-white">INDIGO COFFEE</h1>
             <span className="text-[10px] tracking-[0.2em] uppercase text-indigo-300 -mt-1 font-bold">IDO & IDDO</span>
           </div>
-           
+          
           <div className="flex gap-3">
             <button 
-              onClick={() => setIsAIChatOpen(true)}
+              onClick={handleOpenChat}
               className="p-2.5 rounded-full bg-indigo-900/50 text-indigo-200 hover:bg-indigo-800 hover:text-white transition-all ring-1 ring-indigo-500/30 flex items-center justify-center gap-2 group relative"
               title="AI Assistant"
             >
               <Sparkles className="w-5 h-5 group-hover:animate-spin-slow transition-transform" />
+              {/* Optional Subtle Label */}
               <span className="hidden sm:inline text-[10px] font-bold uppercase tracking-wider pl-1">AI Assistant</span>
             </button>
             <button 
@@ -328,15 +344,19 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="w-16 h-16 rounded-2xl bg-indigo-50 flex items-center justify-center text-3xl shadow-inner shrink-0 group-hover/item:scale-110 transition-transform">
-                        {item.image}
+                      <div className="w-16 h-16 rounded-2xl bg-indigo-50 flex items-center justify-center text-3xl shadow-inner shrink-0 group-hover/item:scale-110 transition-transform overflow-hidden">
+                        {item.image.startsWith('http') ? (
+                          <img src={item.image} alt={item.name} className="w-full h-full object-cover" />
+                        ) : (
+                          item.image
+                        )}
                       </div>
                     </div>
 
                     {/* Admin Actions Overlay */}
                     {isAdminMode && (
                       <div className="absolute bottom-4 left-4 flex gap-2">
-                          <button 
+                         <button 
                           onClick={(e) => { e.stopPropagation(); setEditingItem(item); }}
                           className="p-2 bg-indigo-950 text-white rounded-xl shadow-lg hover:bg-indigo-800 transition-colors"
                         >
@@ -358,7 +378,7 @@ export default function App() {
         })}
       </main>
 
-      <footer className="w-full mt-16 pb-12 text-center">
+      <footer className="w-full mt-16 pb-24 text-center">
         <div className="flex flex-col items-center gap-4 text-slate-300">
            <div className="h-px w-24 bg-indigo-100 mb-4"></div>
            <p className="text-indigo-950 font-serif tracking-[0.3em] font-black text-xl">INDIGO COFFEE</p>
@@ -371,70 +391,82 @@ export default function App() {
 
       {/* Floating AI Barista UI */}
       {isAIChatOpen && (
-        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-4 bg-indigo-950/40 backdrop-blur-md animate-in fade-in duration-300">
-          <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="bg-indigo-950 p-6 text-white flex justify-between items-center relative">
-               <div className="absolute top-0 left-0 w-full h-full opacity-10 pointer-events-none">
-                 <div className="absolute inset-0 bg-gradient-to-br from-indigo-400 to-transparent"></div>
-               </div>
-               <div className="flex items-center gap-3 relative z-10">
-                 <div className="w-10 h-10 bg-indigo-500 rounded-full flex items-center justify-center">
-                   <Sparkles className="w-6 h-6 text-white animate-pulse" />
-                 </div>
-                 <div>
-                   <h3 className="font-bold text-lg">Indigo AI Barista</h3>
-                   <p className="text-[10px] text-indigo-300 uppercase tracking-widest">Personal Recommendation</p>
-                 </div>
-               </div>
-               <button onClick={() => setIsAIChatOpen(false)} className="bg-white/10 hover:bg-white/20 p-2 rounded-full transition-colors relative z-10">
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-indigo-950/40 backdrop-blur-md animate-in fade-in duration-300">
+          <div className="w-full max-w-lg bg-indigo-950 sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col h-full sm:h-auto sm:max-h-[90vh]">
+            {/* Header */}
+            <div className="p-6 text-white flex justify-between items-center relative">
+               <button onClick={handleCloseChat} className="bg-white/10 hover:bg-white/20 p-2 rounded-full transition-colors relative z-10">
                  <X className="w-5 h-5" />
                </button>
-            </div>
-             
-            <div className="flex-grow overflow-y-auto p-6 space-y-6">
-              {!aiResponse && !isAILoading && (
-                <div className="text-center space-y-4 py-8">
-                  <div className="text-5xl mb-4">☕✨</div>
-                  <h4 className="text-xl font-bold text-indigo-950">מה מתחשק לכם היום?</h4>
-                  <p className="text-slate-500">ספרו לי איך אתם מרגישים ואמליץ לכם על הזיווג המושלם.</p>
-                </div>
-              )}
+               
+               <div className="flex flex-col items-center text-center relative z-10">
+                 <h3 className="font-bold text-xl font-serif">Indigo AI Barista</h3>
+                 <p className="text-[10px] text-indigo-300 uppercase tracking-widest font-bold">PERSONAL RECOMMENDATION</p>
+               </div>
 
-              {aiResponse && (
-                <div className="bg-indigo-50 rounded-2xl p-5 border border-indigo-100 text-slate-800 leading-relaxed whitespace-pre-line animate-in slide-in-from-bottom-4 duration-500">
-                  <div className="flex gap-2 text-indigo-500 mb-2">
-                    <Sparkles className="w-4 h-4" />
-                    <span className="text-[10px] font-bold uppercase tracking-widest">Barista Recommends</span>
+               <div className="w-10 h-10 bg-indigo-500/50 rounded-full flex items-center justify-center relative">
+                 <Sparkles className="w-6 h-6 text-white" />
+                 <div className="absolute -top-1 -right-1 bg-indigo-400 rounded-full p-0.5 border-2 border-indigo-950">
+                    <Plus className="w-2 h-2 text-white" />
+                 </div>
+               </div>
+            </div>
+            
+            {/* Content Area */}
+            <div className="flex-grow overflow-y-auto p-4 sm:p-6 bg-slate-100/50 flex flex-col gap-4">
+              {chatMessages.map((msg, idx) => (
+                <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2`}>
+                  <div className={`max-w-[85%] sm:max-w-[75%] rounded-2xl p-4 ${
+                    msg.role === 'user' 
+                      ? 'bg-indigo-600 text-white rounded-tl-none shadow-md' 
+                      : 'bg-white border border-slate-100 text-slate-800 rounded-tr-none shadow-sm'
+                  }`}>
+                    {msg.role === 'assistant' ? (
+                      <div className="markdown-body prose prose-sm prose-indigo max-w-none">
+                        <Markdown components={{
+                          strong: ({node, ...props}) => <span className="text-indigo-700 font-black block mb-1 mt-3 first:mt-0" {...props} />,
+                          p: ({node, ...props}) => <p className="mb-2 last:mb-0 text-slate-600 font-medium leading-relaxed" {...props} />,
+                          ol: ({node, ...props}) => <div className="space-y-4 my-3" {...props} />,
+                          li: ({node, ...props}) => <div {...props} />
+                        }}>
+                          {msg.content}
+                        </Markdown>
+                      </div>
+                    ) : (
+                      <p className="font-medium leading-relaxed">{msg.content}</p>
+                    )}
                   </div>
-                  {/* --- שימוש בפונקציה החדשה להצגת טקסט --- */}
-                  {renderFormattedText(aiResponse)}
                 </div>
-              )}
+              ))}
 
               {isAILoading && (
-                <div className="flex flex-col items-center justify-center py-12 gap-4">
-                  <RefreshCw className="w-10 h-10 text-indigo-500 animate-spin" />
-                  <p className="text-indigo-900 font-bold animate-pulse italic">הבריסטה הדיגיטלי שלנו חושב על המלצה מיוחדת...</p>
+                <div className="flex justify-start animate-in fade-in">
+                  <div className="bg-white border border-slate-100 rounded-2xl rounded-tr-none p-4 shadow-sm flex items-center gap-3">
+                    <RefreshCw className="w-5 h-5 text-indigo-500 animate-spin" />
+                    <span className="text-sm text-indigo-900 font-bold animate-pulse italic">מקליד...</span>
+                  </div>
                 </div>
               )}
+              <div ref={messagesEndRef} />
             </div>
 
-            <div className="p-6 border-t border-slate-100 bg-slate-50">
-               <div className="flex gap-2">
+            {/* Input Area */}
+            <div className="p-4 sm:p-6 border-t border-slate-100 bg-slate-50">
+               <div className="flex gap-2 items-center">
                  <input 
                   type="text" 
                   value={aiMood}
                   onChange={(e) => setAiMood(e.target.value)}
-                  placeholder="אני מרגיש/ה... (רעב/ה, עייפ/ה, בא לי משהו מתוק)"
-                  className="flex-grow bg-white border border-slate-200 rounded-2xl px-5 py-4 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-slate-800 shadow-sm transition-all"
+                  placeholder="הודעה..."
+                  className="flex-grow bg-white border border-slate-200 rounded-full px-5 py-3 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-slate-800 shadow-sm transition-all"
                   onKeyDown={(e) => e.key === 'Enter' && askAI()}
                  />
                  <button 
                   onClick={askAI}
                   disabled={isAILoading || !aiMood.trim()}
-                  className="bg-indigo-950 text-white p-4 rounded-2xl shadow-lg hover:bg-indigo-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
+                  className="bg-indigo-600 text-white w-12 h-12 rounded-full shadow-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95 flex items-center justify-center shrink-0"
                  >
-                   <MessageSquare className="w-6 h-6" />
+                   <Send className="w-5 h-5 transform -scale-x-100" />
                  </button>
                </div>
             </div>
@@ -512,6 +544,27 @@ export default function App() {
                 />
               </div>
               <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">תמונה / אימוג'י</label>
+                <div className="flex gap-2 items-center">
+                  <input 
+                    type="text" 
+                    value={editingItem.image}
+                    onChange={(e) => setEditingItem({...editingItem, image: e.target.value})}
+                    className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                    placeholder="אימוג'י או קישור לתמונה"
+                  />
+                  <label className="cursor-pointer p-3 bg-indigo-100 text-indigo-600 rounded-xl hover:bg-indigo-200 transition-colors flex items-center justify-center">
+                    {isUploading ? <RefreshCw className="w-5 h-5 animate-spin" /> : <UploadCloud className="w-5 h-5" />}
+                    <input type="file" accept="image/*" className="hidden" onChange={(e) => handleImageUpload(e, true)} disabled={isUploading} />
+                  </label>
+                </div>
+                {editingItem.image.startsWith('http') && (
+                  <div className="mt-2 w-20 h-20 rounded-xl overflow-hidden border border-slate-200">
+                    <img src={editingItem.image} alt="Preview" className="w-full h-full object-cover" />
+                  </div>
+                )}
+              </div>
+              <div className="space-y-1">
                 <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">תיאור</label>
                 <textarea 
                   value={editingItem.description || ''}
@@ -566,13 +619,25 @@ export default function App() {
                 />
               </div>
                <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">אימוג'י / אייקון</label>
-                <input 
-                  type="text" 
-                  value={newItemData.image}
-                  onChange={(e) => setNewItemData({...newItemData, image: e.target.value})}
-                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-600 outline-none text-center text-2xl"
-                />
+                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">תמונה / אימוג'י</label>
+                <div className="flex gap-2 items-center">
+                  <input 
+                    type="text" 
+                    value={newItemData.image}
+                    onChange={(e) => setNewItemData({...newItemData, image: e.target.value})}
+                    className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-600 outline-none text-center text-2xl"
+                    placeholder="אימוג'י או קישור לתמונה"
+                  />
+                  <label className="cursor-pointer p-3 bg-indigo-100 text-indigo-600 rounded-xl hover:bg-indigo-200 transition-colors flex items-center justify-center">
+                    {isUploading ? <RefreshCw className="w-5 h-5 animate-spin" /> : <UploadCloud className="w-5 h-5" />}
+                    <input type="file" accept="image/*" className="hidden" onChange={(e) => handleImageUpload(e, false)} disabled={isUploading} />
+                  </label>
+                </div>
+                {newItemData.image.startsWith('http') && (
+                  <div className="mt-2 w-20 h-20 rounded-xl overflow-hidden border border-slate-200 mx-auto">
+                    <img src={newItemData.image} alt="Preview" className="w-full h-full object-cover" />
+                  </div>
+                )}
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">תיאור קצר</label>
