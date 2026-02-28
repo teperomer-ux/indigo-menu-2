@@ -41,7 +41,12 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [isAILoading, setIsAILoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadSuccess, setUploadSuccess] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setUploadSuccess(false);
+  }, [editingItem, addingToCategory]);
 
   useEffect(() => {
     if (isAIChatOpen) {
@@ -54,6 +59,7 @@ export default function App() {
     if (!file) return;
 
     setIsUploading(true);
+    setUploadSuccess(false);
     try {
       const storageRef = ref(storage, `menu_images/${Date.now()}_${file.name}`);
       await uploadBytes(storageRef, file);
@@ -64,11 +70,14 @@ export default function App() {
       } else {
         setNewItemData({ ...newItemData, image: downloadURL });
       }
+      setUploadSuccess(true);
+      setTimeout(() => setUploadSuccess(false), 3000);
     } catch (error) {
       console.error("Error uploading image:", error);
       alert("שגיאה בהעלאת התמונה");
     } finally {
       setIsUploading(false);
+      e.target.value = ''; // Reset input
     }
   };
 
@@ -553,8 +562,8 @@ export default function App() {
                     className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
                     placeholder="אימוג'י או קישור לתמונה"
                   />
-                  <label className="cursor-pointer p-3 bg-indigo-100 text-indigo-600 rounded-xl hover:bg-indigo-200 transition-colors flex items-center justify-center">
-                    {isUploading ? <RefreshCw className="w-5 h-5 animate-spin" /> : <UploadCloud className="w-5 h-5" />}
+                  <label className={`cursor-pointer p-3 ${uploadSuccess ? 'bg-green-100 text-green-600' : 'bg-indigo-100 text-indigo-600'} rounded-xl hover:bg-opacity-80 transition-colors flex items-center justify-center`}>
+                    {isUploading ? <RefreshCw className="w-5 h-5 animate-spin" /> : uploadSuccess ? <CheckCircle className="w-5 h-5" /> : <UploadCloud className="w-5 h-5" />}
                     <input type="file" accept="image/*" className="hidden" onChange={(e) => handleImageUpload(e, true)} disabled={isUploading} />
                   </label>
                 </div>
@@ -628,8 +637,8 @@ export default function App() {
                     className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-600 outline-none text-center text-2xl"
                     placeholder="אימוג'י או קישור לתמונה"
                   />
-                  <label className="cursor-pointer p-3 bg-indigo-100 text-indigo-600 rounded-xl hover:bg-indigo-200 transition-colors flex items-center justify-center">
-                    {isUploading ? <RefreshCw className="w-5 h-5 animate-spin" /> : <UploadCloud className="w-5 h-5" />}
+                  <label className={`cursor-pointer p-3 ${uploadSuccess ? 'bg-green-100 text-green-600' : 'bg-indigo-100 text-indigo-600'} rounded-xl hover:bg-opacity-80 transition-colors flex items-center justify-center`}>
+                    {isUploading ? <RefreshCw className="w-5 h-5 animate-spin" /> : uploadSuccess ? <CheckCircle className="w-5 h-5" /> : <UploadCloud className="w-5 h-5" />}
                     <input type="file" accept="image/*" className="hidden" onChange={(e) => handleImageUpload(e, false)} disabled={isUploading} />
                   </label>
                 </div>
